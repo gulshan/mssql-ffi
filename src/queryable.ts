@@ -158,6 +158,33 @@ export function runQuerySync<R extends Row | Value[]>(
   return collector.finish(wire);
 }
 
+/** Runs a prepared statement with a blocking call. */
+export function runPreparedSync(
+  lease: Lease,
+  id: number,
+  params: readonly Param[] | undefined,
+  timeoutMs: number | undefined,
+): Collected<Row> {
+  const collector = Collector.rows(lease.decode);
+  const wire = lease.channel.callSync(
+    'prepared.query',
+    { id, params: encodeParams(params) },
+    { timeoutMs, onPartial: collector.onPartial },
+  );
+  return collector.finish(wire);
+}
+
+/** Procedure metadata from the cache, or looked up now. A lookup still in flight is not waited for. */
+function procInfoSync(lease: Lease, name: string, timeoutMs: number | undefined): ProcParamInfo {
+  const key = name.toLowerCase();
+  const cached = lease.procs.get(key);
+  if (cached && !(cached instanceof Promise)) return cached;
+  const c = runQuerySync(lease, Collector.rows(lease.decode), PROC_META_SQL, [name], timeoutMs);
+  const info = procInfoFrom(c.results);
+  lease.procs.set(key, info);
+  return info;
+}
+
 /**
  * Adds blocking variants to the query surface. They run on the same worker and ODBC
  * connection as the async methods but **block the calling thread** until the statement
@@ -187,5 +214,20 @@ export abstract class SyncQueryable extends Queryable {
     return tracedSync({ operation: 'queryRaw', sql, params }, () =>
       runQuerySync(lease, Collector.raw(lease.decode), sql, params, options.timeoutMs),
     );
+  }
+
+  /** Blocking `callProc`. Shares the procedure metadata cache with it. */
+  callProcSync<T = Row>(
+    name: string,
+    args?: ProcArgs,
+    options: SyncQueryOptions = {},
+  ): ProcResult<T> {
+    using lease = this.leaseSync();
+    const info = procInfoSync(lease, name, options.timeoutMs);
+    const call = buildProcCall(info, args);
+    const c = tracedSync({ operation: 'callProc', sql: call.sql, params: call.params }, () =>
+      runQuerySync(lease, Collector.rows(lease.decode), call.sql, call.params, options.timeoutMs),
+    );
+    return toProcResult<T>(c, call.outputs);
   }
 }

@@ -95,18 +95,28 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     return this.#channel.closed;
   }
 
-  /** Prepares a statement for repeated execution. Free it (or `await using` it) when done. */
-  async prepare(sql: string): Promise<PreparedStatement> {
-    using l = await this.lease();
-    const id = await l.channel.call('prepare', { sql });
+  #track(id: number, sql: string): PreparedStatement {
     const ps = new PreparedStatement(
       sql,
       id,
       (s) => this.lease(s),
+      () => this.leaseSync(),
       (p) => this.#prepared.delete(p),
     );
     this.#prepared.add(ps);
     return ps;
+  }
+
+  /** Prepares a statement for repeated execution. Free it (or `await using` it) when done. */
+  async prepare(sql: string): Promise<PreparedStatement> {
+    using l = await this.lease();
+    return this.#track(await l.channel.call('prepare', { sql }), sql);
+  }
+
+  /** Blocking `prepare`. Free the statement (or `using` it) when done. */
+  prepareSync(sql: string): PreparedStatement {
+    using l = this.leaseSync();
+    return this.#track(l.channel.callSync('prepare', { sql }), sql);
   }
 
   /**
@@ -125,6 +135,30 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     await using tx = await this.beginTransaction(options);
     const result = await fn(tx);
     if (tx.active) await tx.commit();
+    return result;
+  }
+
+  /** Blocking `beginTransaction`. The connection is reserved for the transaction until it ends. */
+  beginTransactionSync(options?: TransactionOptions): Transaction {
+    return Transaction.beginSync(this.leaseSync(), options);
+  }
+
+  /**
+   * Blocking `transaction`: runs `fn` in a transaction, commits when it returns and rolls
+   * back when it throws. `fn` must be synchronous: a returned promise rolls back and throws
+   * a TypeError, since its statements would run after the commit.
+   */
+  transactionSync<R>(fn: (tx: Transaction) => R, options?: TransactionOptions): R {
+    using tx = this.beginTransactionSync(options);
+    const result = fn(tx);
+    if (isThenable(result)) {
+      // Its later statements fail on the rolled back transaction; that is reported here.
+      Promise.resolve(result).catch(() => {});
+      throw new TypeError(
+        'transactionSync callback returned a promise; use transaction() for async callbacks',
+      );
+    }
+    if (tx.active) tx.commitSync();
     return result;
   }
 
@@ -157,6 +191,14 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
   [Symbol.dispose](): void {
     this.closeSync();
   }
+}
+
+function isThenable(v: unknown): v is PromiseLike<unknown> {
+  return (
+    (typeof v === 'object' || typeof v === 'function') &&
+    v !== null &&
+    typeof (v as { then?: unknown }).then === 'function'
+  );
 }
 
 /** Opens a connection with an ODBC connection string. */
