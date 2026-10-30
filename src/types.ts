@@ -126,8 +126,10 @@ export interface QueryOptions {
 
 export interface SyncQueryOptions {
   /**
-   * Server-side statement timeout (SQL_ATTR_QUERY_TIMEOUT), rounded up to whole seconds.
-   * Expiry throws a `TimeoutError` DOMException whose `cause` is the driver's SqlError.
+   * Cancels the statement after this many milliseconds. Expiry throws a `TimeoutError`
+   * DOMException whose `cause` is the driver error. Connection methods cancel with
+   * SQLCancel; the standalone `querySync`/`queryRawSync` use SQL_ATTR_QUERY_TIMEOUT,
+   * which counts whole seconds (rounded up).
    */
   timeoutMs?: number | undefined;
 }

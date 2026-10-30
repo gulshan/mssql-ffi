@@ -102,6 +102,8 @@ Queryable (async: query, queryRaw, stream, callProc)  ◀── Pool
 
 This rule also prevents a deadlock. Without it, the worker could block in `flow.acquire()` on async chunks that the blocked main thread never releases.
 
+`Channel.callSync` adds a second, lower-level guard: it refuses to block while any async request is actually in flight on the worker. `closeSync` uses only that one. Closing while statements are merely queued behind the lock is allowed and rejects them, exactly as `close()` does. Closing during an idle transaction rolls it back on disconnect.
+
 **Timeouts.** Sync options are `{ timeoutMs }` only. The main thread waits in slices until the deadline, then calls `SQLCancel` through the existing `CancelSlot`, exactly as an aborted async call does. It keeps waiting for the worker's reply, then throws a `TimeoutError` (`DOMException`, as `AbortSignal.timeout` gives) with the driver error as `cause`. This matches the async behaviour.
 
 **Errors.** `SqlError` is thrown with the stack of the `xSync` call site (`Error.captureStackTrace` in `callSync`).
@@ -182,7 +184,7 @@ Only the one-shot functions bind the full ODBC subset in the main thread. Connec
 1. **Done.** `Mutex.tryAcquire`, the `Collector` refactor and the proc-cache change. Existing tests stay green (`node --run check`).
 2. **Done.** `SQL_ATTR_QUERY_TIMEOUT` in `odbc/statement.ts`, then `oneshot.ts` (`querySync`, `queryRawSync`), with agreement, one-shot and timeout tests. This step is small and stands on its own.
 3. **Done.** Sync port in `protocol.ts`, `worker.ts` and `channel.ts` (`callSync`, `closeSync`, dead flag); unit tests.
-4. `SyncQueryable`, plus `Connection.openSync`, `querySync`, `queryRawSync`, `closeSync`, `dispose`. Agreement and busy tests.
+4. **Done.** `SyncQueryable`, plus `Connection.openSync`, `querySync`, `queryRawSync`, `closeSync`, `dispose`. Agreement and busy tests.
 5. `prepareSync`, `callProcSync`, sync transactions; mixing and lifecycle tests.
 6. Worker-path timeouts (`SQLCancel`); timeout test.
 7. README section, JSDoc warnings, bench scenarios.

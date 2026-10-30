@@ -8,13 +8,14 @@ import type { ProcParamInfo } from './proc.ts';
 import type { Partial } from './protocol.ts';
 import { combine, QueryStream } from './stream.ts';
 import type { StreamOptions } from './stream.ts';
-import { traced } from './trace.ts';
+import { traced, tracedSync } from './trace.ts';
 import type {
   Param,
   ProcResult,
   QueryOptions,
   QueryResult,
   RawResult,
+  SyncQueryOptions,
   Row,
   Value,
   WireQueryResult,
@@ -138,5 +139,53 @@ export abstract class Queryable {
       runQuery(lease, call.sql, call.params, signal),
     );
     return toProcResult<T>(c, call.outputs);
+  }
+}
+
+/** Runs `sql` with a blocking call; rows are decoded as they arrive. */
+export function runQuerySync<R extends Row | Value[]>(
+  lease: Lease,
+  collector: Collector<R>,
+  sql: string,
+  params: readonly Param[] | undefined,
+  timeoutMs: number | undefined,
+): Collected<R> {
+  const args = { sql, params: encodeParams(params) };
+  const wire = lease.channel.callSync('query', args, {
+    timeoutMs,
+    onPartial: collector.onPartial,
+  });
+  return collector.finish(wire);
+}
+
+/**
+ * Adds blocking variants to the query surface. They run on the same worker and ODBC
+ * connection as the async methods but **block the calling thread** until the statement
+ * completes. A blocking call cannot wait for the connection: it throws
+ * `ConnectionBusyError` while an async operation, a stream or a transaction holds it.
+ */
+export abstract class SyncQueryable extends Queryable {
+  /** Exclusive access to the connection right now, or ConnectionBusyError. */
+  protected abstract leaseSync(): Lease;
+
+  /** Blocking `query`. */
+  querySync<T = Row>(
+    sql: string,
+    params?: readonly Param[],
+    options: SyncQueryOptions = {},
+  ): QueryResult<T> {
+    using lease = this.leaseSync();
+    const c = tracedSync({ operation: 'query', sql, params }, () =>
+      runQuerySync(lease, Collector.rows(lease.decode), sql, params, options.timeoutMs),
+    );
+    return toQueryResult<T>(c);
+  }
+
+  /** Blocking `queryRaw`. */
+  queryRawSync(sql: string, params?: readonly Param[], options: SyncQueryOptions = {}): RawResult {
+    using lease = this.leaseSync();
+    return tracedSync({ operation: 'queryRaw', sql, params }, () =>
+      runQuerySync(lease, Collector.raw(lease.decode), sql, params, options.timeoutMs),
+    );
   }
 }

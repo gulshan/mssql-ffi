@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { Channel, ConnectionClosedError } from '../../src/channel.ts';
+import { Channel, ConnectionBusyError, ConnectionClosedError } from '../../src/channel.ts';
 import type { Partial } from '../../src/protocol.ts';
 
 const FAKE = new URL('../support/fake-worker.ts', import.meta.url);
@@ -91,6 +91,16 @@ describe('Channel.callSync', () => {
     const seen: unknown[] = [];
     await channel.call('query', query('partials:8'), undefined, (p) => seen.push(p.rows[0]![0]));
     expect(seen).toHaveLength(8);
+  });
+
+  it('refuses to block while an async request is in flight', async () => {
+    channel = new Channel(FAKE);
+    const pending = channel.call('query', query('sleep:100'));
+    expect(() => channel.callSync('query', query('echo'))).toThrow(ConnectionBusyError);
+    expect(() => channel.closeSync()).toThrow(ConnectionBusyError);
+    expect(channel.closed).toBe(false);
+    expect(await pending).toBe('slept');
+    expect(channel.callSync('query', query('echo'))).toEqual(query('echo'));
   });
 
   it('closeSync closes the channel for both kinds of calls', async () => {

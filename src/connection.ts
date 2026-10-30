@@ -1,5 +1,5 @@
 // connection.ts - a connection: one worker thread owning one ODBC connection.
-import { Channel } from './channel.ts';
+import { Channel, ConnectionBusyError } from './channel.ts';
 import { decodeOptions } from './decode.ts';
 import type { DecodeOptions } from './decode.ts';
 import { lease } from './lease.ts';
@@ -7,7 +7,7 @@ import type { Lease } from './lease.ts';
 import { Mutex } from './mutex.ts';
 import { PreparedStatement } from './prepared.ts';
 import type { ProcCache } from './proc.ts';
-import { Queryable } from './queryable.ts';
+import { SyncQueryable } from './queryable.ts';
 import { Transaction } from './transaction.ts';
 import type {
   ConnectionOptions,
@@ -25,7 +25,7 @@ export function connectionLease(conn: Connection, signal?: AbortSignal): Promise
   return leaseOf(conn, signal);
 }
 
-export class Connection extends Queryable implements AsyncDisposable {
+export class Connection extends SyncQueryable implements AsyncDisposable, Disposable {
   static {
     leaseOf = (conn, signal) => conn.lease(signal);
   }
@@ -57,8 +57,37 @@ export class Connection extends Queryable implements AsyncDisposable {
     return new Connection(channel, options);
   }
 
+  /**
+   * Opens a connection with an ODBC connection string, blocking the calling thread until
+   * the login completes. The connection supports both async and blocking calls.
+   */
+  static openSync(connectionString: string, options: ConnectionOptions = {}): Connection {
+    const channel = new Channel();
+    try {
+      channel.callSync('open', { connectionString, loginTimeoutSecs: options.loginTimeoutSecs });
+    } catch (e) {
+      try {
+        channel.closeSync();
+      } catch {
+        // the login error is the one to report
+      }
+      throw e;
+    }
+    return new Connection(channel, options);
+  }
+
   protected async lease(signal?: AbortSignal): Promise<Lease> {
     const release = await this.#mutex.acquire(signal);
+    return lease(this.#channel, this.#decode, this.#procs, release);
+  }
+
+  protected leaseSync(): Lease {
+    const release = this.#mutex.tryAcquire();
+    if (!release) {
+      throw new ConnectionBusyError(
+        'Connection is in use by an async query, stream or transaction; a blocking call cannot wait for it',
+      );
+    }
     return lease(this.#channel, this.#decode, this.#procs, release);
   }
 
@@ -106,14 +135,41 @@ export class Connection extends Queryable implements AsyncDisposable {
     await this.#channel.close();
   }
 
+  /**
+   * Closes the connection, blocking until the worker has disconnected. Throws
+   * ConnectionBusyError while an async request is in flight (use `close()` then).
+   */
+  closeSync(): void {
+    try {
+      this.#channel.closeSync();
+    } finally {
+      if (this.#channel.closed) {
+        for (const ps of this.#prepared) ps.markFreed();
+        this.#prepared.clear();
+      }
+    }
+  }
+
   [Symbol.asyncDispose](): Promise<void> {
     return this.close();
+  }
+
+  [Symbol.dispose](): void {
+    this.closeSync();
   }
 }
 
 /** Opens a connection with an ODBC connection string. */
 export function open(connectionString: string, options?: ConnectionOptions): Promise<Connection> {
   return Connection.open(connectionString, options);
+}
+
+/**
+ * Opens a connection with an ODBC connection string. **Blocks the calling thread** until the
+ * login completes; the connection supports both async and blocking calls.
+ */
+export function openSync(connectionString: string, options?: ConnectionOptions): Connection {
+  return Connection.openSync(connectionString, options);
 }
 
 /** Opens a connection, runs one query and closes it. */

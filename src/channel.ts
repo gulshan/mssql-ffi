@@ -35,6 +35,17 @@ export class ConnectionClosedError extends Error {
   override name = 'ConnectionClosedError';
 }
 
+/** A blocking call was made while the connection is in use by an async operation. */
+export class ConnectionBusyError extends Error {
+  override name = 'ConnectionBusyError';
+
+  constructor(
+    message = 'Connection is busy with an async operation; a blocking call cannot wait for it',
+  ) {
+    super(message);
+  }
+}
+
 export class Channel {
   readonly #worker: Worker;
   readonly #cancel: CancelSlot;
@@ -108,6 +119,8 @@ export class Channel {
    */
   callSync<K extends Op>(op: K, args: ArgsOf<K>, options: CallSyncOptions = {}): ResultOf<K> {
     if (this.#dead) throw this.#dead;
+    // Waiting here while async replies are due would deadlock: they need the event loop.
+    if (this.#pending.size) throw new ConnectionBusyError();
     const { timeoutMs, onPartial } = options;
     const id = ++this.#seq;
     const site = {};
@@ -154,6 +167,8 @@ export class Channel {
   /** Closes the ODBC connection and stops the worker, blocking until the connection is closed. */
   closeSync(): void {
     if (this.#dead) return;
+    // Checked before anything is torn down, so a busy connection stays usable.
+    if (this.#pending.size) throw new ConnectionBusyError();
     try {
       this.callSync('close', undefined);
     } finally {
