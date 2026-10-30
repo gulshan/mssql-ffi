@@ -52,6 +52,18 @@ Measured with `SELECT 1` against a local server: 20 calls after a warm-up, built
 
 The worker costs about 28 ms per one-shot call: thread start, module load, port and shared memory. In-thread, the only real cost left is the login. The first in-thread call in a process took 105 ms, because it loads the ODBC library and sets up the environment handle.
 
+The bench's `oneshot` scenarios on the synthetic setup later gave, per call:
+
+| Path                                | ms/call |
+| ----------------------------------- | ------- |
+| in-thread `querySync(cs, …)`        | ~0.9    |
+| msnodesqlv8 `promises.query(cs, …)` | ~1      |
+| worker `query(cs, …)`               | ~18     |
+
+The login there was much cheaper than in the first measurement. The worker's start-up cost is the same either way. So the async one-shot `query(cs, …)` and every `open()` pay about 17 ms for the thread.
+
+**Sync gives no per-call gain on an open connection.** In the `small` scenarios, `conn.querySync` matched async `conn.query` within noise. The server round trip dominates, and a postMessage hop costs about the same as an `Atomics.wait` wake-up.
+
 Differences from `conn.querySync`:
 
 | Topic         | `conn.querySync` (worker)                 | standalone `querySync` (in-thread)                                                                     |
@@ -186,5 +198,5 @@ Only the one-shot functions bind the full ODBC subset in the main thread. Connec
 3. **Done.** Sync port in `protocol.ts`, `worker.ts` and `channel.ts` (`callSync`, `closeSync`, dead flag); unit tests.
 4. **Done.** `SyncQueryable`, plus `Connection.openSync`, `querySync`, `queryRawSync`, `closeSync`, `dispose`. Agreement and busy tests.
 5. **Done.** `prepareSync`, `callProcSync`, sync transactions; mixing and lifecycle tests.
-6. Worker-path timeouts (`SQLCancel`); timeout test.
-7. README section, JSDoc warnings, bench scenarios.
+6. **Done** (landed with step 3). Worker-path timeouts (`SQLCancel`); timeout test.
+7. **Done.** README section, JSDoc warnings, bench scenarios.

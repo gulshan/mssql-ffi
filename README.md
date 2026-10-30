@@ -69,6 +69,39 @@ Every query accepts `{ signal, timeoutMs }`. Aborting calls `SQLCancel` on the r
 
 A connection runs one statement at a time; other calls queue. A transaction or an open stream reserves the connection until it ends.
 
+### Blocking (sync) API
+
+For scripts, CLIs, migrations and start-up code, most calls also have a `…Sync` form. **These block the calling thread**: no timers, I/O or other callbacks run until they return. Don't use them in servers.
+
+```ts
+import { openSync, querySync } from 'mssql-ffi';
+
+// One-shot: runs in the calling thread, no worker (the cheapest single query).
+const { first } = querySync(cs, 'SELECT name FROM sys.databases');
+
+// A connection opened either way serves both async and blocking calls.
+using db = openSync(cs);
+db.querySync('UPDATE t SET n = n + 1 WHERE id = ?', [1]);
+const later = await db.query('SELECT n FROM t'); // same connection
+db.transactionSync((tx) => {
+  tx.querySync('INSERT INTO log (msg) VALUES (?)', ['hello']);
+});
+```
+
+| Async                                       | Blocking                                                          |
+| ------------------------------------------- | ----------------------------------------------------------------- |
+| `query(cs, …)` / —                          | `querySync(cs, …)`, `queryRawSync(cs, …)`: one-shot, no worker    |
+| `open(cs)`                                  | `openSync(cs)`                                                    |
+| `conn.query` / `queryRaw` / `callProc`      | `querySync` / `queryRawSync` / `callProcSync`                     |
+| `conn.prepare`, `ps.query`, `ps.free`       | `prepareSync`, `ps.querySync`, `ps.freeSync`                      |
+| `conn.beginTransaction`, `conn.transaction` | `beginTransactionSync`, `transactionSync(fn)` (`fn` must be sync) |
+| `tx.commit` / `tx.rollback`                 | `commitSync` / `rollbackSync`                                     |
+| `conn.close()`, `await using`               | `closeSync()`, `using`                                            |
+
+`stream` and `Pool` have no blocking form. Blocking calls take `{ timeoutMs }` (no `signal`). On a connection the timeout cancels the statement with `SQLCancel`. The one-shot functions use the driver's query timeout, which counts whole seconds. Either way, a timeout throws a `TimeoutError` whose `cause` is the driver error.
+
+A blocking call never waits for async work on the same connection, since that work needs the event loop. While an async query, a stream or a transaction holds the connection, it throws `ConnectionBusyError` right away.
+
 ### Connection options
 
 | Option              | Default        |                                                                                                            |
@@ -101,7 +134,7 @@ A connection runs one statement at a time; other calls queue. A transaction or a
 
 ### Tracing
 
-Operations are published on the `diagnostics_channel` tracing channel `mssql-ffi:query` (`TRACE_CHANNEL`). The context is `{ operation, sql, params }`.
+Operations are published on the `diagnostics_channel` tracing channel `mssql-ffi:query` (`TRACE_CHANNEL`). The context is `{ operation, sql, params }`, plus `sync: true` for blocking calls, which are traced with `traceSync`.
 
 ## Development
 

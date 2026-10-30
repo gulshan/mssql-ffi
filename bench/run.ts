@@ -24,7 +24,8 @@ import { COLUMNS, createSql, ROWS, TABLE } from './schema.ts';
 }
 
 const scenarios = (
-  process.env['SCENARIOS'] ?? 'query,query-nomax,raw,stream,small,concurrent'
+  process.env['SCENARIOS'] ??
+  'query,query-nomax,raw,stream,small,concurrent,query-sync,small-sync,oneshot,oneshot-sync'
 ).split(',');
 const iterations = process.env['ITERATIONS'] ?? '5';
 const libs = ['ffi', 'v8'];
@@ -43,6 +44,19 @@ const median = (xs: number[]): number => {
   const s = xs.toSorted((a, b) => a - b);
   return s[Math.floor(s.length / 2)]!;
 };
+
+/** Scenarios where rows per second is meaningful (the others count calls). */
+const ROW_SCENARIOS = new Set([
+  'query',
+  'query-nomax',
+  'raw',
+  'stream',
+  'concurrent',
+  'query-sync',
+]);
+
+/** mssql-ffi runs the `-sync` scenarios with blocking calls (msnodesqlv8 has none). */
+const blocking = (r: Result): boolean => r.lib === 'ffi' && r.scenario.endsWith('-sync');
 
 const results: Result[] = [];
 for (const scenario of scenarios) {
@@ -65,9 +79,10 @@ const rows = results.map((r) => ({
   'median ms': Math.round(median(r.ms)),
   'min ms': Math.round(Math.min(...r.ms)),
   rows: r.rows,
-  'rows/s': r.scenario === 'small' ? '-' : Math.round(r.rows / (median(r.ms) / 1000)),
-  'loop max ms': Math.round(r.loopMaxMs),
-  'loop p99 ms': Math.round(r.loopP99Ms),
+  'rows/s': ROW_SCENARIOS.has(r.scenario) ? Math.round(r.rows / (median(r.ms) / 1000)) : '-',
+  // A blocking call stops the loop outright, so the delay monitor never gets to sample it.
+  'loop max ms': blocking(r) ? 'blocked' : Math.round(r.loopMaxMs),
+  'loop p99 ms': blocking(r) ? 'blocked' : Math.round(r.loopP99Ms),
   'peak RSS MB': r.rssMb,
 }));
 console.table(rows);

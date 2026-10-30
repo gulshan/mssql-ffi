@@ -1,12 +1,14 @@
 // One benchmark case in a fresh process: node case.ts <lib> <scenario> <iterations>
 // Prints one JSON line with per-iteration timings, rows, event-loop delay and peak RSS.
 import { monitorEventLoopDelay } from 'node:perf_hooks';
-import { open as ffiOpen } from 'mssql-ffi';
+import { open as ffiOpen, query as ffiQuery, querySync as ffiQuerySync } from 'mssql-ffi';
 import sqlv8 from 'msnodesqlv8';
 import { SELECT_ALL, SELECT_NO_MAX } from './schema.ts';
 
 const SMALL = SELECT_ALL.replace('SELECT *', 'SELECT TOP 1 *');
 const MEDIUM = SELECT_ALL.replace('SELECT *', 'SELECT TOP 10000 *');
+/** One-shot calls per iteration (open → query → close each). */
+const ONESHOTS = 20;
 
 const [lib = '', scenario = '', iterArg = '5'] = process.argv.slice(2);
 const iterations = Number(iterArg);
@@ -19,6 +21,10 @@ interface Client {
   raw(sql: string): Promise<number>;
   /** Row-by-row consumption; returns the row count. */
   stream(sql: string): Promise<number>;
+  /** Blocking query where the library has one (mssql-ffi), else its async query. */
+  querySync(sql: string): Promise<number>;
+  /** Opens a connection, runs `sql` and closes it; `sync` uses the blocking form if any. */
+  oneShot(sql: string, sync: boolean): Promise<number>;
   close(): Promise<void>;
 }
 
@@ -32,6 +38,9 @@ async function ffiClient(): Promise<Client> {
       for await (const _ of db.stream(sql, [], { batchSize: 512 })) n++;
       return n;
     },
+    querySync: async (sql) => db.querySync(sql).first.length,
+    oneShot: async (sql, sync) =>
+      (sync ? ffiQuerySync(cs, sql) : await ffiQuery(cs, sql)).first.length,
     close: () => db.close(),
   };
 }
@@ -58,6 +67,9 @@ async function v8Client(): Promise<Client> {
         q.on('error', reject);
         q.on('done', () => resolve(rows));
       }),
+    querySync: async (sql) => (await conn.promises.query(sql)).first.length,
+    // msnodesqlv8 has no blocking API: both forms are its ad-hoc promises.query.
+    oneShot: async (sql) => (await sqlv8.promises.query(cs, sql)).first.length,
     close: () => conn.promises.close(),
   };
 }
@@ -106,15 +118,28 @@ if (scenario === 'concurrent') {
   await Promise.all(clients.map((c) => c.close()));
 } else {
   const client = await connect();
-  if (scenario === 'small') {
+  if (scenario === 'small' || scenario === 'small-sync') {
     // Per-call overhead: 200 sequential single-row queries per iteration.
+    const fn = scenario === 'small' ? client.query : client.querySync;
     out = await timed(async () => {
-      for (let i = 0; i < 200; i++) await client.query(SMALL);
+      for (let i = 0; i < 200; i++) await fn(SMALL);
       return 200;
+    });
+  } else if (scenario === 'oneshot' || scenario === 'oneshot-sync') {
+    // Connection set-up cost: each call opens, queries and closes its own connection.
+    out = await timed(async () => {
+      for (let i = 0; i < ONESHOTS; i++) await client.oneShot(SMALL, scenario === 'oneshot-sync');
+      return ONESHOTS;
     });
   } else {
     const fn =
-      scenario === 'raw' ? client.raw : scenario === 'stream' ? client.stream : client.query;
+      scenario === 'raw'
+        ? client.raw
+        : scenario === 'stream'
+          ? client.stream
+          : scenario === 'query-sync'
+            ? client.querySync
+            : client.query;
     const sql = scenario === 'query-nomax' ? SELECT_NO_MAX : SELECT_ALL;
     out = await timed(() => fn(sql));
   }

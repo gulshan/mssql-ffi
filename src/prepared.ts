@@ -68,7 +68,10 @@ export class PreparedStatement implements AsyncDisposable, Disposable {
     if (!lease.channel.closed) await lease.channel.call('prepared.free', { id: this.#id });
   }
 
-  /** Blocking `free`. Throws ConnectionBusyError (and stays usable) while the connection is busy. */
+  /**
+   * Blocking `free`. **Blocks the calling thread.** Throws ConnectionBusyError (and stays
+   * usable) while the connection is busy.
+   */
   freeSync(): void {
     if (this.#freed) return;
     using lease = this.#leaseSync();
@@ -90,6 +93,7 @@ export class PreparedStatement implements AsyncDisposable, Disposable {
     return this.free();
   }
 
+  /** `using` support: `freeSync()`. **Blocks the calling thread.** */
   [Symbol.dispose](): void {
     this.freeSync();
   }

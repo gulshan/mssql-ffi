@@ -174,7 +174,7 @@ export function runPreparedSync(
   return collector.finish(wire);
 }
 
-/** Procedure metadata from the cache, or looked up now. A lookup still in flight is not waited for. */
+/** Procedure metadata from the cache, or looked up now (a lookup in flight is not waited for). */
 function procInfoSync(lease: Lease, name: string, timeoutMs: number | undefined): ProcParamInfo {
   const key = name.toLowerCase();
   const cached = lease.procs.get(key);
@@ -195,7 +195,7 @@ export abstract class SyncQueryable extends Queryable {
   /** Exclusive access to the connection right now, or ConnectionBusyError. */
   protected abstract leaseSync(): Lease;
 
-  /** Blocking `query`. */
+  /** Blocking `query`. **Blocks the calling thread.** */
   querySync<T = Row>(
     sql: string,
     params?: readonly Param[],
@@ -208,7 +208,7 @@ export abstract class SyncQueryable extends Queryable {
     return toQueryResult<T>(c);
   }
 
-  /** Blocking `queryRaw`. */
+  /** Blocking `queryRaw`. **Blocks the calling thread.** */
   queryRawSync(sql: string, params?: readonly Param[], options: SyncQueryOptions = {}): RawResult {
     using lease = this.leaseSync();
     return tracedSync({ operation: 'queryRaw', sql, params }, () =>
@@ -216,7 +216,10 @@ export abstract class SyncQueryable extends Queryable {
     );
   }
 
-  /** Blocking `callProc`. Shares the procedure metadata cache with it. */
+  /**
+   * Blocking `callProc`. **Blocks the calling thread.** Shares the procedure metadata
+   * cache with it.
+   */
   callProcSync<T = Row>(
     name: string,
     args?: ProcArgs,

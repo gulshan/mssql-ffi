@@ -104,7 +104,7 @@ export class Transaction extends SyncQueryable implements AsyncDisposable, Dispo
     return this.#track(await l.channel.call('prepare', { sql }), sql);
   }
 
-  /** Blocking `prepare`. */
+  /** Blocking `prepare`. **Blocks the calling thread.** */
   prepareSync(sql: string): PreparedStatement {
     using l = this.leaseSync();
     return this.#track(l.channel.callSync('prepare', { sql }), sql);
@@ -118,12 +118,12 @@ export class Transaction extends SyncQueryable implements AsyncDisposable, Dispo
     return this.#end(false);
   }
 
-  /** Blocking `commit`. */
+  /** Blocking `commit`. **Blocks the calling thread.** */
   commitSync(): void {
     this.#endSync(true);
   }
 
-  /** Blocking `rollback`. */
+  /** Blocking `rollback`. **Blocks the calling thread.** */
   rollbackSync(): void {
     this.#endSync(false);
   }
@@ -182,7 +182,10 @@ export class Transaction extends SyncQueryable implements AsyncDisposable, Dispo
     if (this.#state === 'active') await this.rollback();
   }
 
-  /** Blocking dispose: rolls back unless already committed or rolled back. */
+  /**
+   * `using` support: rolls back unless already committed or rolled back.
+   * **Blocks the calling thread.**
+   */
   [Symbol.dispose](): void {
     if (this.#state === 'active') this.rollbackSync();
   }

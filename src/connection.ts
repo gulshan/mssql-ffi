@@ -85,7 +85,8 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     const release = this.#mutex.tryAcquire();
     if (!release) {
       throw new ConnectionBusyError(
-        'Connection is in use by an async query, stream or transaction; a blocking call cannot wait for it',
+        'Connection is in use by an async query, stream or transaction; ' +
+          'a blocking call cannot wait for it',
       );
     }
     return lease(this.#channel, this.#decode, this.#procs, release);
@@ -113,7 +114,10 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     return this.#track(await l.channel.call('prepare', { sql }), sql);
   }
 
-  /** Blocking `prepare`. Free the statement (or `using` it) when done. */
+  /**
+   * Blocking `prepare`. **Blocks the calling thread.** Free the statement (or `using` it)
+   * when done.
+   */
   prepareSync(sql: string): PreparedStatement {
     using l = this.leaseSync();
     return this.#track(l.channel.callSync('prepare', { sql }), sql);
@@ -138,15 +142,19 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     return result;
   }
 
-  /** Blocking `beginTransaction`. The connection is reserved for the transaction until it ends. */
+  /**
+   * Blocking `beginTransaction`. **Blocks the calling thread.** The connection is reserved
+   * for the transaction until it ends.
+   */
   beginTransactionSync(options?: TransactionOptions): Transaction {
     return Transaction.beginSync(this.leaseSync(), options);
   }
 
   /**
-   * Blocking `transaction`: runs `fn` in a transaction, commits when it returns and rolls
-   * back when it throws. `fn` must be synchronous: a returned promise rolls back and throws
-   * a TypeError, since its statements would run after the commit.
+   * Blocking `transaction`. **Blocks the calling thread.** Runs `fn` in a transaction,
+   * commits when it returns and rolls back when it throws. `fn` must be synchronous: a
+   * returned promise rolls back and throws a TypeError, since its statements would run
+   * after the commit.
    */
   transactionSync<R>(fn: (tx: Transaction) => R, options?: TransactionOptions): R {
     using tx = this.beginTransactionSync(options);
@@ -170,7 +178,7 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
   }
 
   /**
-   * Closes the connection, blocking until the worker has disconnected. Throws
+   * Closes the connection. **Blocks the calling thread** until the worker has disconnected. Throws
    * ConnectionBusyError while an async request is in flight (use `close()` then).
    */
   closeSync(): void {
@@ -188,6 +196,7 @@ export class Connection extends SyncQueryable implements AsyncDisposable, Dispos
     return this.close();
   }
 
+  /** `using` support: `closeSync()`. **Blocks the calling thread.** */
   [Symbol.dispose](): void {
     this.closeSync();
   }
