@@ -50,6 +50,19 @@ export class Statement {
     this.#reader = undefined;
   }
 
+  /** Server-side limit for later executions, in whole seconds (0 = none). Expiry raises HYT00. */
+  queryTimeout(secs: number): void {
+    this.#check(
+      odbc().SQLSetStmtAttrW(
+        this.handle,
+        C.SQL_ATTR_QUERY_TIMEOUT,
+        BigInt(secs),
+        C.SQL_IS_UINTEGER,
+      ),
+      'SQLSetStmtAttr(QUERY_TIMEOUT)',
+    );
+  }
+
   prepare(sql: string): void {
     this.#check(odbc().SQLPrepareW(this.handle, wide(sql), C.SQL_NTS), 'SQLPrepare');
     this.#prepared = true;

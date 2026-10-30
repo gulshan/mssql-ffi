@@ -10,10 +10,16 @@ export interface QueryTraceContext {
   operation: 'query' | 'queryRaw' | 'stream' | 'prepared' | 'callProc';
   sql: string;
   params: readonly Param[] | undefined;
+  /** True for blocking calls (`querySync`...), traced with `traceSync`. */
+  sync?: boolean | undefined;
 }
 
 const channel: TracingChannel<QueryTraceContext, QueryTraceContext> = tracingChannel(TRACE_CHANNEL);
 
 export function traced<T>(context: QueryTraceContext, fn: () => Promise<T>): Promise<T> {
   return channel.hasSubscribers ? channel.tracePromise(fn, context) : fn();
+}
+
+export function tracedSync<T>(context: QueryTraceContext, fn: () => T): T {
+  return channel.hasSubscribers ? channel.traceSync(fn, { ...context, sync: true }) : fn();
 }

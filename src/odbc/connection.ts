@@ -70,6 +70,7 @@ export class Connection {
   }
 
   #execute(stmt: Statement, args: StatementArgs, track: Track): void {
+    if (args.timeoutSecs) stmt.queryTimeout(args.timeoutSecs);
     // Untyped NULLs need a prepared statement so the driver can describe their type.
     if (args.params.some((p: WireParam) => p.type === undefined)) {
       track(stmt, () => {

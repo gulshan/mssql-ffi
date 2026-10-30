@@ -1,11 +1,12 @@
 // connection.ts - a connection: one worker thread owning one ODBC connection.
 import { Channel } from './channel.ts';
+import { decodeOptions } from './decode.ts';
 import type { DecodeOptions } from './decode.ts';
 import { lease } from './lease.ts';
 import type { Lease } from './lease.ts';
 import { Mutex } from './mutex.ts';
 import { PreparedStatement } from './prepared.ts';
-import type { ProcParamInfo } from './proc.ts';
+import type { ProcCache } from './proc.ts';
 import { Queryable } from './queryable.ts';
 import { Transaction } from './transaction.ts';
 import type {
@@ -32,16 +33,13 @@ export class Connection extends Queryable implements AsyncDisposable {
   readonly #channel: Channel;
   readonly #mutex = new Mutex();
   readonly #decode: DecodeOptions;
-  readonly #procs = new Map<string, Promise<ProcParamInfo>>();
+  readonly #procs: ProcCache = new Map();
   readonly #prepared = new Set<PreparedStatement>();
 
   private constructor(channel: Channel, options: ConnectionOptions) {
     super();
     this.#channel = channel;
-    this.#decode = {
-      useNumericNumber: options.useNumericNumber ?? false,
-      useBigIntAsNative: options.useBigIntAsNative ?? false,
-    };
+    this.#decode = decodeOptions(options);
   }
 
   /** Opens a connection with an ODBC connection string. */

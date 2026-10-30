@@ -27,6 +27,7 @@ export const SQL_ATTR_LOGIN_TIMEOUT = 103;
 export const SQL_ATTR_TXN_ISOLATION = 108;
 export const SQL_IS_UINTEGER = -5;
 export const SQL_IS_POINTER = -4;
+export const SQL_ATTR_QUERY_TIMEOUT = 0;
 export const SQL_ATTR_ROW_BIND_TYPE = 5;
 export const SQL_BIND_BY_COLUMN = 0n;
 export const SQL_ATTR_ROWS_FETCHED_PTR = 26;

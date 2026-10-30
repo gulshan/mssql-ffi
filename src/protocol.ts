@@ -12,6 +12,8 @@ import type {
 export interface StatementArgs {
   sql: string;
   params: WireParam[];
+  /** Sets SQL_ATTR_QUERY_TIMEOUT (whole seconds) on the statement. */
+  timeoutSecs?: number | undefined;
 }
 
 export interface CursorColumns {

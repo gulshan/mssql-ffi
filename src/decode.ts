@@ -1,9 +1,16 @@
 // decode.ts - wire values -> JS values (Temporal, number/bigint, string decimals).
-import type { Kind, Row, Value, WireResultSet, WireValue } from './types.ts';
+import type { ConnectionOptions, Kind, Row, Value, WireResultSet, WireValue } from './types.ts';
 
 export interface DecodeOptions {
   useNumericNumber: boolean;
   useBigIntAsNative: boolean;
+}
+
+export function decodeOptions(o: ConnectionOptions): DecodeOptions {
+  return {
+    useNumericNumber: o.useNumericNumber ?? false,
+    useBigIntAsNative: o.useBigIntAsNative ?? false,
+  };
 }
 
 type Decoder = (v: WireValue) => Value;

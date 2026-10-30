@@ -2,7 +2,7 @@
 import { Connection, connectionLease } from './connection.ts';
 import { lease } from './lease.ts';
 import type { Lease } from './lease.ts';
-import type { ProcParamInfo } from './proc.ts';
+import type { ProcCache } from './proc.ts';
 import { Queryable } from './queryable.ts';
 import { Transaction } from './transaction.ts';
 import type { ConnectionOptions, TransactionOptions } from './types.ts';
@@ -55,7 +55,7 @@ export class Pool extends Queryable implements AsyncDisposable {
   readonly #idle: Idle[] = [];
   readonly #busy = new Set<Connection>();
   readonly #waiters: Waiter[] = [];
-  readonly #procs = new Map<string, Promise<ProcParamInfo>>();
+  readonly #procs: ProcCache = new Map();
   #opening = 0;
   #closed = false;
   #timer: NodeJS.Timeout | undefined;

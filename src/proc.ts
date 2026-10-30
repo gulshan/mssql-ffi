@@ -5,8 +5,10 @@
 //   EXEC @__rc = [dbo].[proc] @a = ?, @b = @__o1 OUTPUT;
 //   SELECT @__rc AS [returns], @__o1 AS [b];
 // The trailing result set is split off into `returns` and `output`.
+import { toQueryResult } from './collect.ts';
+import type { Collected } from './collect.ts';
 import { isTypedParam, typed } from './sql.ts';
-import type { Param, SqlTypeName } from './types.ts';
+import type { Param, ProcResult, Row, SqlTypeName } from './types.ts';
 
 export interface ProcParam {
   /** Name including the leading `@`. */
@@ -22,6 +24,29 @@ export interface ProcParamInfo {
   /** Schema-qualified, quoted name resolved by the server. */
   qualifiedName: string;
   params: ProcParam[];
+}
+
+/**
+ * Procedure metadata by lower-cased name. A lookup in flight is a promise; once it
+ * settles the value replaces it, so synchronous callers can use it too.
+ */
+export type ProcCache = Map<string, ProcParamInfo | Promise<ProcParamInfo>>;
+
+/** Reads the two result sets of `PROC_META_SQL`. */
+export function procInfoFrom([head, params]: readonly Row[][]): ProcParamInfo {
+  return {
+    qualifiedName: String(head?.[0]?.['qualifiedName']),
+    params: (params ?? []) as unknown as ProcParam[],
+  };
+}
+
+/** Splits the trailing result set of a call into the return code and output parameters. */
+export function toProcResult<T>(c: Collected<Row>, outputs: readonly string[]): ProcResult<T> {
+  const [values] = c.results.pop() ?? [];
+  c.meta.pop();
+  const output: ProcResult['output'] = {};
+  for (const key of outputs) output[key] = values?.[key] ?? null;
+  return { ...toQueryResult<T>(c), output, returns: Number(values?.['returns'] ?? 0) };
 }
 
 export const PROC_META_SQL = `

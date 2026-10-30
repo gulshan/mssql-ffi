@@ -1,6 +1,7 @@
 // prepared.ts - a statement prepared once and executed many times.
 import type { Lease } from './lease.ts';
-import { runPrepared, toQueryResult } from './queryable.ts';
+import { toQueryResult } from './collect.ts';
+import { runPrepared } from './queryable.ts';
 import { combine } from './stream.ts';
 import { traced } from './trace.ts';
 import type { Param, QueryOptions, QueryResult, Row } from './types.ts';

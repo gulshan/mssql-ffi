@@ -4,19 +4,28 @@ export type Release = () => void;
 
 export class Mutex {
   #tail: Promise<void> = Promise.resolve();
+  /** Holders plus waiters (including aborted ones whose turn has not come yet). */
+  #count = 0;
 
-  /** Resolves with a release function once every earlier holder has released. */
-  acquire(signal?: AbortSignal): Promise<Release> {
-    if (signal?.aborted) return Promise.reject(signal.reason);
+  #enqueue(): { prev: Promise<void>; release: Release } {
     const turn = Promise.withResolvers<void>();
     const prev = this.#tail;
     this.#tail = turn.promise;
+    this.#count++;
     let released = false;
     const release: Release = () => {
       if (released) return;
       released = true;
+      this.#count--;
       turn.resolve();
     };
+    return { prev, release };
+  }
+
+  /** Resolves with a release function once every earlier holder has released. */
+  acquire(signal?: AbortSignal): Promise<Release> {
+    if (signal?.aborted) return Promise.reject(signal.reason);
+    const { prev, release } = this.#enqueue();
     if (!signal) return prev.then(() => release);
 
     const { promise, resolve, reject } = Promise.withResolvers<Release>();
@@ -32,5 +41,14 @@ export class Mutex {
       else resolve(release);
     });
     return promise;
+  }
+
+  /**
+   * Takes the lock now if nobody holds or waits for it; undefined otherwise. A lock just
+   * released to a waiter that has not resumed yet still counts as taken.
+   */
+  tryAcquire(): Release | undefined {
+    if (this.#count > 0) return undefined;
+    return this.#enqueue().release;
   }
 }

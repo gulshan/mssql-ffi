@@ -124,6 +124,14 @@ export interface QueryOptions {
   timeoutMs?: number | undefined;
 }
 
+export interface SyncQueryOptions {
+  /**
+   * Server-side statement timeout (SQL_ATTR_QUERY_TIMEOUT), rounded up to whole seconds.
+   * Expiry throws a `TimeoutError` DOMException whose `cause` is the driver's SqlError.
+   */
+  timeoutMs?: number | undefined;
+}
+
 export interface ConnectionOptions {
   /** Return decimal/numeric/money columns as `number` instead of a lossless `string`. */
   useNumericNumber?: boolean | undefined;
