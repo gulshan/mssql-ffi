@@ -54,13 +54,14 @@ The worker costs about 28 ms per one-shot call: thread start, module load, port 
 
 The bench's `oneshot` scenarios on the synthetic setup later gave, per call:
 
-| Path                                | ms/call |
-| ----------------------------------- | ------- |
-| in-thread `querySync(cs, …)`        | ~0.9    |
-| msnodesqlv8 `promises.query(cs, …)` | ~1      |
-| worker `query(cs, …)`               | ~18     |
+| Path                                        | ms/call |
+| ------------------------------------------- | ------- |
+| in-thread `querySync(cs, …)`                | ~0.7    |
+| msnodesqlv8 `promises.query(cs, …)`         | ~1–2    |
+| worker `query(cs, …)`, new worker per call  | ~19     |
+| worker `query(cs, …)`, reused parked worker | ~1.1    |
 
-The login there was much cheaper than in the first measurement. The worker's start-up cost is the same either way. So the async one-shot `query(cs, …)` and every `open()` pay about 17 ms for the thread.
+The login there was much cheaper than in the first measurement. The worker's start-up cost is the same either way: about 10–15 ms for the thread, plus a few ms of first-use warm-up in a fresh isolate, plus about 2 ms to terminate it. A worker whose connection closed cleanly is therefore parked and reused by the next `open()` or `query(cs, …)` (see `workers.ts` and PLAN.md). Only the first connection, and any connection opened while every parked worker is in use, pay for a new thread.
 
 **Sync gives no per-call gain on an open connection.** In the `small` scenarios, `conn.querySync` matched async `conn.query` within noise. The server round trip dominates, and a postMessage hop costs about the same as an `Atomics.wait` wake-up.
 
@@ -134,7 +135,7 @@ This rule also prevents a deadlock. Without it, the worker could block in `flow.
 | ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `protocol.ts`       | `WorkerData` gains `port: MessagePort` (transferred) and `sync: SharedArrayBuffer` (`Int32[0]` reply counter, `Int32[1]` dead flag)                                                                                                                                                |
 | `worker.ts`         | Also listens on `port`. `handle()` takes a `reply(res, transfer)` sink: for the sync port it posts, then `Atomics.add` + `notify`. Partials still go through `flow.acquire()`                                                                                                      |
-| `channel.ts`        | `callSync(op, args, timeoutMs?)`: post → wait → drain loop, releasing `flow` per partial. `closeSync()`: sync `close`, then `worker.terminate()` without awaiting, then mark dead                                                                                                  |
+| `channel.ts`        | `callSync(op, args, timeoutMs?)`: post → wait → drain loop, releasing `flow` per partial. `closeSync()`: sync `close`, mark dead, then park the worker for reuse (`workers.ts`), or terminate it without awaiting if the close failed                                              |
 | `mutex.ts`          | `tryAcquire(): (() => void) \| undefined`                                                                                                                                                                                                                                          |
 | `lease.ts`          | No change. A sync lease is the same object, built from `tryAcquire`                                                                                                                                                                                                                |
 | `queryable.ts`      | Turn `collect()` into a `Collector` (`onPartial(p)`, `finish(wire)`) shared by all paths. `finish` also decodes rows carried in `wire` itself, which is what the one-shot path returns, since it has no partials. Add `SyncQueryable` with `protected abstract leaseSync(): Lease` |
