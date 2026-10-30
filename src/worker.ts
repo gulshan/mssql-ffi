@@ -7,12 +7,25 @@ import { Connection } from './odbc/connection.ts';
 import type { Track } from './odbc/connection.ts';
 import type { OnRows } from './odbc/statement.ts';
 import type { Request, Response, WorkerData } from './protocol.ts';
+import { SyncSignal } from './syncsignal.ts';
 import type { WireValue } from './types.ts';
 
 if (!parentPort) throw new Error('mssql-ffi: worker.ts must run as a worker thread');
-const port = parentPort;
-const slot = new CancelSlot((workerData as WorkerData).cancel);
-const flow = new Flow((workerData as WorkerData).flow);
+const parent = parentPort;
+const data = workerData as WorkerData;
+const slot = new CancelSlot(data.cancel);
+const flow = new Flow(data.flow);
+const signal = new SyncSignal(data.sync);
+process.on('exit', () => signal.exiting());
+
+/** Where the replies to a request go: the worker's parent port, or the sync port. */
+type Reply = (res: Response, transfer: ArrayBuffer[]) => void;
+
+const replyAsync: Reply = (res, transfer) => parent.postMessage(res, transfer);
+const replySync: Reply = (res, transfer) => {
+  data.port.postMessage(res, transfer);
+  signal.posted();
+};
 
 let conn: Connection | undefined;
 
@@ -28,7 +41,7 @@ function transferables(rows: WireValue[][], out: ArrayBuffer[]): void {
   }
 }
 
-function handle(req: Request): { value: unknown; transfer?: ArrayBuffer[] } {
+function handle(req: Request, reply: Reply): { value: unknown; transfer?: ArrayBuffer[] } {
   const track: Track = (stmt, fn) => {
     slot.publish(stmt.handle, req.id);
     try {
@@ -42,9 +55,8 @@ function handle(req: Request): { value: unknown; transfer?: ArrayBuffer[] } {
   const onRows: OnRows = (set, columns, rows) => {
     const transfer: ArrayBuffer[] = [];
     transferables(rows, transfer);
-    const res: Response = { id: req.id, partial: { set, columns, rows } };
     flow.acquire();
-    port.postMessage(res, transfer);
+    reply({ id: req.id, partial: { set, columns, rows } }, transfer);
   };
   switch (req.op) {
     case 'open':
@@ -89,15 +101,18 @@ function handle(req: Request): { value: unknown; transfer?: ArrayBuffer[] } {
   }
 }
 
-port.on('message', (req: Request) => {
+function serve(req: Request, reply: Reply): void {
   let res: Response;
   let transfer: ArrayBuffer[] = [];
   try {
-    const out = handle(req);
+    const out = handle(req, reply);
     res = { id: req.id, ok: true, value: out.value };
     transfer = out.transfer ?? [];
   } catch (e) {
     res = { id: req.id, ok: false, error: serializeError(e) };
   }
-  port.postMessage(res, transfer);
-});
+  reply(res, transfer);
+}
+
+parent.on('message', (req: Request) => serve(req, replyAsync));
+data.port.on('message', (req: Request) => serve(req, replySync));

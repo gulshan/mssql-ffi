@@ -1,4 +1,5 @@
 // protocol.ts - messages between the main thread (channel.ts) and worker.ts
+import type { MessagePort } from 'node:worker_threads';
 import type { SerializedError } from './errors.ts';
 import type {
   ColumnMeta,
@@ -75,4 +76,7 @@ export type Response =
 export interface WorkerData {
   cancel: SharedArrayBuffer;
   flow: SharedArrayBuffer;
+  /** Requests sent by blocking calls; replies are announced through `sync`. */
+  port: MessagePort;
+  sync: SharedArrayBuffer;
 }

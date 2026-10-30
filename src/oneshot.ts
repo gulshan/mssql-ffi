@@ -3,7 +3,7 @@
 import { Collector, toQueryResult } from './collect.ts';
 import type { Collected } from './collect.ts';
 import { decodeOptions } from './decode.ts';
-import { SqlError } from './errors.ts';
+import { SqlError, timeoutError } from './errors.ts';
 import { Connection } from './odbc/connection.ts';
 import { encodeParams } from './params.ts';
 import { tracedSync } from './trace.ts';
@@ -27,11 +27,7 @@ export function timeoutSecs(timeoutMs: number | undefined): number | undefined {
 
 /** A statement timeout surfaces like an async `timeoutMs`: TimeoutError, driver error as cause. */
 function timedOut(e: unknown): unknown {
-  if (!(e instanceof SqlError) || e.sqlstate !== 'HYT00') return e;
-  return new DOMException('The operation was aborted due to timeout', {
-    name: 'TimeoutError',
-    cause: e,
-  });
+  return e instanceof SqlError && e.sqlstate === 'HYT00' ? timeoutError(e) : e;
 }
 
 function run<R extends Row | Value[]>(

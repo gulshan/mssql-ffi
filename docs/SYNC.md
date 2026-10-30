@@ -181,7 +181,7 @@ Only the one-shot functions bind the full ODBC subset in the main thread. Connec
 
 1. **Done.** `Mutex.tryAcquire`, the `Collector` refactor and the proc-cache change. Existing tests stay green (`node --run check`).
 2. **Done.** `SQL_ATTR_QUERY_TIMEOUT` in `odbc/statement.ts`, then `oneshot.ts` (`querySync`, `queryRawSync`), with agreement, one-shot and timeout tests. This step is small and stands on its own.
-3. Sync port in `protocol.ts`, `worker.ts` and `channel.ts` (`callSync`, `closeSync`, dead flag); unit tests.
+3. **Done.** Sync port in `protocol.ts`, `worker.ts` and `channel.ts` (`callSync`, `closeSync`, dead flag); unit tests.
 4. `SyncQueryable`, plus `Connection.openSync`, `querySync`, `queryRawSync`, `closeSync`, `dispose`. Agreement and busy tests.
 5. `prepareSync`, `callProcSync`, sync transactions; mixing and lifecycle tests.
 6. Worker-path timeouts (`SQLCancel`); timeout test.

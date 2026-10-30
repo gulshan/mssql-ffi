@@ -43,6 +43,14 @@ export class SqlError extends Error {
   }
 }
 
+/** The error a `timeoutMs` expiry throws, like `AbortSignal.timeout`'s reason, with a cause. */
+export function timeoutError(cause: unknown): DOMException {
+  return new DOMException('The operation was aborted due to timeout', {
+    name: 'TimeoutError',
+    cause,
+  });
+}
+
 export interface SerializedError {
   name: string;
   message: string;
