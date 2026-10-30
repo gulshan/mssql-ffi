@@ -36,6 +36,7 @@ Connection ── postMessage(req) ─────────▶ dispatcher
 - `stream()` is pull-based: the iterator asks for N rows at a time, and the worker keeps the stmt open between requests, which gives backpressure for free. Disposing the iterator or breaking out of the loop closes the cursor.
 - A connection serializes requests (a queue). `transaction()` holds the queue lock, so outside queries don't leak into it.
 - Worker `exit`/`error` rejects all pending requests and marks the connection dead.
+- Starting a worker thread costs more than a login on a warm driver, so a worker whose connection closed cleanly is parked (`workers.ts`): unref'd, holding no ODBC connection, at most 4, each exiting after 10 s idle. The next `open()` or one-shot `query(cs, …)` takes it. Request ids keep counting on the reused worker, so a late cancel from the closed connection cannot hit a new request. A worker that died or whose `close` failed is terminated instead.
 
 ## Layout
 
@@ -53,6 +54,7 @@ src/
   trace.ts              diagnostics_channel tracingChannel('mssql-ffi:query')
   protocol.ts           worker messages
   worker.ts             2nd tsdown entry
+  workers.ts            parked workers, reused by the next connection
   odbc/
     platform.ts         library name / pointer size (win32 now, linux later)
     ffi.ts              lazy dlopen, signatures

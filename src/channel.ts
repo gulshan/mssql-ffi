@@ -1,12 +1,14 @@
 // channel.ts - request/response RPC with the connection's worker thread.
-import { MessageChannel, receiveMessageOnPort, Worker } from 'node:worker_threads';
-import type { MessagePort } from 'node:worker_threads';
-import { CANCEL_BYTES, CancelSlot } from './cancel.ts';
+import { receiveMessageOnPort } from 'node:worker_threads';
+import type { MessagePort, Worker } from 'node:worker_threads';
+import type { CancelSlot } from './cancel.ts';
 import { deserializeError, timeoutError } from './errors.ts';
 import type { SerializedError } from './errors.ts';
-import { Flow, FLOW_BYTES } from './flow.ts';
-import type { ArgsOf, Op, Partial, Response, ResultOf, WorkerData } from './protocol.ts';
-import { SYNC_BYTES, SyncSignal } from './syncsignal.ts';
+import type { Flow } from './flow.ts';
+import type { ArgsOf, Op, Partial, Response, ResultOf } from './protocol.ts';
+import type { SyncSignal } from './syncsignal.ts';
+import { park, retire, take } from './workers.ts';
+import type { Thread } from './workers.ts';
 
 /** Longest single block in `callSync`, so worker death and deadlines are noticed. */
 const WAIT_SLICE_MS = 50;
@@ -47,6 +49,8 @@ export class ConnectionBusyError extends Error {
 }
 
 export class Channel {
+  readonly #url: URL;
+  readonly #thread: Thread;
   readonly #worker: Worker;
   readonly #cancel: CancelSlot;
   readonly #flow: Flow;
@@ -54,32 +58,40 @@ export class Channel {
   /** Main thread end of the sync port; read only with `receiveMessageOnPort`. */
   readonly #port: MessagePort;
   readonly #signal: SyncSignal;
-  #seq = 0;
   #dead: Error | undefined;
+  readonly #onMessage = (res: Response): void => this.#settle(res);
+  readonly #onError = (e: Error): void => this.#fail(e);
+  readonly #onExit = (code: number): void =>
+    this.#fail(new ConnectionClosedError(`Connection worker exited (code ${code})`));
 
   /** @param workerUrl tests substitute a fake worker that speaks the same protocol. */
   constructor(workerUrl: URL = WORKER_URL) {
-    const cancel = new SharedArrayBuffer(CANCEL_BYTES);
-    this.#cancel = new CancelSlot(cancel);
-    const flow = new SharedArrayBuffer(FLOW_BYTES);
-    this.#flow = new Flow(flow);
-    const sync = new SharedArrayBuffer(SYNC_BYTES);
-    this.#signal = new SyncSignal(sync);
-    const { port1, port2 } = new MessageChannel();
-    this.#port = port1;
-    this.#worker = new Worker(workerUrl, {
-      name: 'mssql-ffi',
-      workerData: { cancel, flow, port: port2, sync } satisfies WorkerData,
-      transferList: [port2],
-    });
-    // An idle connection must not keep the process alive; ref while requests are pending.
-    this.#worker.unref();
-    this.#worker.on('message', (res: Response) => this.#settle(res));
-    this.#worker.on('error', (e: Error) => this.#fail(e));
-    this.#worker.on('messageerror', (e: Error) => this.#fail(e));
-    this.#worker.on('exit', (code) =>
-      this.#fail(new ConnectionClosedError(`Connection worker exited (code ${code})`)),
-    );
+    this.#url = workerUrl;
+    // Usually a worker parked by a closed connection: starting a thread is the slow part.
+    this.#thread = take(workerUrl);
+    ({
+      worker: this.#worker,
+      cancel: this.#cancel,
+      flow: this.#flow,
+      port: this.#port,
+      signal: this.#signal,
+    } = this.#thread);
+    this.#worker.on('message', this.#onMessage);
+    this.#worker.on('error', this.#onError);
+    this.#worker.on('messageerror', this.#onError);
+    this.#worker.on('exit', this.#onExit);
+  }
+
+  /**
+   * Gives the worker up once the channel is closed: parked for the next connection when its
+   * ODBC connection closed cleanly and nothing is left in flight, terminated otherwise.
+   */
+  #release(clean: boolean): Promise<void> {
+    this.#worker.off('message', this.#onMessage);
+    this.#worker.off('error', this.#onError);
+    this.#worker.off('messageerror', this.#onError);
+    this.#worker.off('exit', this.#onExit);
+    return clean ? park(this.#url, this.#thread) : retire(this.#thread);
   }
 
   get closed(): boolean {
@@ -122,7 +134,7 @@ export class Channel {
     // Waiting here while async replies are due would deadlock: they need the event loop.
     if (this.#pending.size) throw new ConnectionBusyError();
     const { timeoutMs, onPartial } = options;
-    const id = ++this.#seq;
+    const id = ++this.#thread.seq;
     const site = {};
     Error.captureStackTrace(site, Channel.prototype.callSync);
     const deadline = timeoutMs === undefined ? Infinity : performance.now() + timeoutMs;
@@ -164,17 +176,18 @@ export class Channel {
     }
   }
 
-  /** Closes the ODBC connection and stops the worker, blocking until the connection is closed. */
+  /** Closes the ODBC connection and releases the worker, blocking until the connection is closed. */
   closeSync(): void {
     if (this.#dead) return;
     // Checked before anything is torn down, so a busy connection stays usable.
     if (this.#pending.size) throw new ConnectionBusyError();
+    let clean = false;
     try {
       this.callSync('close', undefined);
+      clean = true;
     } finally {
       this.#fail(new ConnectionClosedError('Connection is closed'));
-      this.#port.close();
-      void this.#worker.terminate();
+      void this.#release(clean);
     }
   }
 
@@ -187,7 +200,7 @@ export class Channel {
   ): Promise<ResultOf<K>> {
     if (this.#dead) return Promise.reject(this.#dead);
     if (signal?.aborted) return Promise.reject(signal.reason);
-    const id = ++this.#seq;
+    const id = ++this.#thread.seq;
     const site = {};
     Error.captureStackTrace(site, Channel.prototype.call);
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
@@ -212,15 +225,17 @@ export class Channel {
     >;
   }
 
-  /** Closes the ODBC connection and stops the worker. */
+  /** Closes the ODBC connection and releases the worker. */
   async close(): Promise<void> {
     if (this.#dead) return;
+    let clean = false;
     try {
       await this.call('close', undefined);
+      // A request sent after the close is still answered by the worker: do not reuse it then.
+      clean = this.#pending.size === 0;
     } finally {
       this.#fail(new ConnectionClosedError('Connection is closed'));
-      this.#port.close();
-      await this.#worker.terminate();
+      await this.#release(clean);
     }
   }
 }

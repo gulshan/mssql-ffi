@@ -7,7 +7,9 @@
 //   sleep:MS         → replies after MS milliseconds
 //   sleepfail:MS     → an error reply after MS milliseconds
 //   stale            → a reply for another request id first, then the real one
-import { parentPort, workerData } from 'node:worker_threads';
+//   thread           → replies with the worker's threadId and the request id
+//   failclose        → the next `close` replies with an error
+import { parentPort, threadId, workerData } from 'node:worker_threads';
 import { Flow } from '../../src/flow.ts';
 import type { Request, Response, WorkerData } from '../../src/protocol.ts';
 import { SyncSignal } from '../../src/syncsignal.ts';
@@ -18,6 +20,8 @@ const signal = new SyncSignal(data.sync);
 process.on('exit', () => signal.exiting());
 
 type Reply = (res: Response) => void;
+
+let failClose = false;
 
 const sleep = (ms: number): void => {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -56,6 +60,14 @@ function serve(req: Request, reply: Reply): void {
     case 'stale':
       reply({ id: req.id + 1000, ok: true, value: 'stale' });
       return ok('fresh');
+    case 'thread':
+      return ok({ threadId, id: req.id });
+    case 'failclose':
+      failClose = true;
+      return ok(null);
+    case 'close':
+      if (failClose) return fail('close failed');
+      return ok(null);
     default:
       return ok(req.args ?? null);
   }
