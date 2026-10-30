@@ -1,0 +1,12 @@
+{
+  "name": "mssql-ffi-bench",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench": "node --env-file-if-exists=../.env run.ts"
+  },
+  "dependencies": {
+    "msnodesqlv8": "6.2.1",
+    "mssql-ffi": "link:.."
+  }
+}

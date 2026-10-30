@@ -1,0 +1,3 @@
+# Separate pnpm root: the benchmark is not part of the library workspace.
+allowBuilds:
+  msnodesqlv8: true
